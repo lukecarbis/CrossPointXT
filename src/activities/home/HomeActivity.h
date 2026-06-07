@@ -35,6 +35,8 @@ class HomeActivity final : public Activity {
     int i = 0;
     if (item == HomeMenuItem::FILE_BROWSER) return i;
     ++i;
+    if (item == HomeMenuItem::TEXT_EDITOR) return i;
+    ++i;
     if (item == HomeMenuItem::RECENTS) return i;
     ++i;
     if (item == HomeMenuItem::OPDS_BROWSER) return hasOpdsUrl ? i : 0;
@@ -49,6 +51,7 @@ class HomeActivity final : public Activity {
   static HomeMenuItem indexToMenuItem(int idx, bool hasOpdsUrl) {
     int i = 0;
     if (idx == i++) return HomeMenuItem::FILE_BROWSER;
+    if (idx == i++) return HomeMenuItem::TEXT_EDITOR;
     if (idx == i++) return HomeMenuItem::RECENTS;
     if (hasOpdsUrl && idx == i++) return HomeMenuItem::OPDS_BROWSER;
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
@@ -57,6 +60,7 @@ class HomeActivity final : public Activity {
   }
   void onSelectBook(const std::string& path);
   void onFileBrowserOpen();
+  void onTextEditorOpen();
   void onRecentsOpen();
   void onSettingsOpen();
   void onFileTransferOpen();

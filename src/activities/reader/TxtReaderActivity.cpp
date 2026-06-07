@@ -59,6 +59,13 @@ void TxtReaderActivity::onExit() {
   txt.reset();
 }
 
+void TxtReaderActivity::onInterfaceOrientationChanged(bool /*landscape*/) {
+  RenderLock lock(*this);
+  initialized = false;
+  pageOffsets.clear();
+  currentPageLines.clear();
+}
+
 void TxtReaderActivity::loop() {
   // Long press BACK (1s+) goes to file selection
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {

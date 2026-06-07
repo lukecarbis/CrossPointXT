@@ -685,6 +685,16 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
   }
 }
 
+void EpubReaderActivity::onInterfaceOrientationChanged(bool /*landscape*/) {
+  RenderLock lock(*this);
+  if (section) {
+    cachedSpineIndex = currentSpineIndex;
+    cachedChapterTotalPageCount = section->pageCount;
+    nextPageNumber = section->currentPage;
+  }
+  section.reset();
+}
+
 void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
   if (selectedPageTurnOption == 0 || selectedPageTurnOption >= std::size(PAGE_TURN_RATES)) {
     automaticPageTurnActive = false;

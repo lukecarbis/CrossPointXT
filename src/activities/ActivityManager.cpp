@@ -5,10 +5,13 @@
 
 #include <algorithm>
 
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
+#include "editor/TextEditorActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
@@ -18,6 +21,30 @@
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FullScreenMessageActivity.h"
+
+namespace {
+constexpr unsigned long INTERFACE_ORIENTATION_HOLD_MS = 700;
+
+void applySettingsOrientation(GfxRenderer& renderer) {
+  switch (SETTINGS.orientation) {
+    case CrossPointSettings::ORIENTATION::PORTRAIT:
+      renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+      break;
+    case CrossPointSettings::ORIENTATION::LANDSCAPE_CW:
+      renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+      break;
+    case CrossPointSettings::ORIENTATION::INVERTED:
+      renderer.setOrientation(GfxRenderer::Orientation::PortraitInverted);
+      break;
+    case CrossPointSettings::ORIENTATION::LANDSCAPE_CCW:
+      renderer.setOrientation(GfxRenderer::Orientation::LandscapeCounterClockwise);
+      break;
+    default:
+      renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+      break;
+  }
+}
+}  // namespace
 
 void ActivityManager::begin() {
   xTaskCreate(&renderTaskTrampoline, "ActivityManagerRender",
@@ -42,6 +69,7 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      applyInterfaceOrientation();
       currentActivity->render(std::move(lock));
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
@@ -56,7 +84,85 @@ void ActivityManager::renderTaskLoop() {
   }
 }
 
+void ActivityManager::applyInterfaceOrientation() {
+  if (interfaceLandscape) {
+    renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+    return;
+  }
+
+  if (isReaderActivity()) {
+    applySettingsOrientation(renderer);
+  } else {
+    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  }
+}
+
+void ActivityManager::notifyInterfaceOrientationChanged() {
+  for (auto& activity : stackActivities) {
+    if (activity) {
+      activity->onInterfaceOrientationChanged(interfaceLandscape);
+    }
+  }
+  if (currentActivity) {
+    currentActivity->onInterfaceOrientationChanged(interfaceLandscape);
+  }
+}
+
+bool ActivityManager::handleInterfaceOrientationHold() {
+  if (!mappedInput.isPressed(MappedInputManager::Button::Up)) {
+    interfaceOrientationHoldConsumed = false;
+    return false;
+  }
+
+  if (interfaceOrientationHoldConsumed) {
+    return true;
+  }
+
+  if (mappedInput.getHeldTime() < INTERFACE_ORIENTATION_HOLD_MS) {
+    return false;
+  }
+
+  interfaceLandscape = !interfaceLandscape;
+  interfaceOrientationHoldConsumed = true;
+  LOG_INF("ACT", "Interface orientation changed to %s", interfaceLandscape ? "landscape" : "portrait");
+  persistInterfaceOrientationForCurrentActivity();
+  applyInterfaceOrientation();
+  notifyInterfaceOrientationChanged();
+  requestUpdate(true);
+  return true;
+}
+
+bool ActivityManager::currentActivityIsTextEditor() const {
+  return currentActivity && currentActivity->name == "TextEditor";
+}
+
+void ActivityManager::persistInterfaceOrientationForCurrentActivity() {
+  if (!currentActivityIsTextEditor() || APP_STATE.textEditorLandscape == interfaceLandscape) {
+    return;
+  }
+
+  APP_STATE.textEditorLandscape = interfaceLandscape;
+  APP_STATE.saveToFile();
+}
+
+void ActivityManager::resetInterfaceOrientation() {
+  persistInterfaceOrientationForCurrentActivity();
+  if (!interfaceLandscape) {
+    interfaceOrientationHoldConsumed = false;
+    return;
+  }
+
+  interfaceLandscape = false;
+  interfaceOrientationHoldConsumed = false;
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  LOG_INF("ACT", "Interface orientation reset to portrait");
+}
+
 void ActivityManager::loop() {
+  if (handleInterfaceOrientationHold()) {
+    return;
+  }
+
   if (currentActivity) {
     // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
     currentActivity->loop();
@@ -173,6 +279,12 @@ void ActivityManager::goToFileTransfer() {
   replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 }
 
+void ActivityManager::goToTextEditor() {
+  interfaceLandscape = APP_STATE.textEditorLandscape;
+  interfaceOrientationHoldConsumed = false;
+  replaceActivity(std::make_unique<TextEditorActivity>(renderer, mappedInput));
+}
+
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToFileBrowser(std::string path) {
@@ -219,10 +331,13 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
     } else if (activityName == "CrossPointWebServer") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
+    } else if (activityName == "TextEditor") {
+      initialMenuItem = HomeMenuItem::TEXT_EDITOR;
     } else if (activityName == "Settings") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }
   }
+  resetInterfaceOrientation();
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem));
 }
 void ActivityManager::goToCrashReport() { replaceActivity(std::make_unique<CrashActivity>(renderer, mappedInput)); }

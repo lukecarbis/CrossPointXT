@@ -16,7 +16,7 @@
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
 
-enum class HomeMenuItem { NONE, FILE_BROWSER, RECENTS, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU };
+enum class HomeMenuItem { NONE, FILE_BROWSER, TEXT_EDITOR, RECENTS, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU };
 
 /**
  * ActivityManager
@@ -65,6 +65,16 @@ class ActivityManager {
   // This variable must only be set by the main loop, to avoid race conditions
   bool requestedUpdate = false;
 
+  bool interfaceLandscape = false;
+  bool interfaceOrientationHoldConsumed = false;
+
+  void applyInterfaceOrientation();
+  bool handleInterfaceOrientationHold();
+  void notifyInterfaceOrientationChanged();
+  void persistInterfaceOrientationForCurrentActivity();
+  bool currentActivityIsTextEditor() const;
+  void resetInterfaceOrientation();
+
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
       : renderer(renderer), mappedInput(mappedInput), renderingMutex(xSemaphoreCreateMutex()) {
@@ -81,6 +91,7 @@ class ActivityManager {
 
   // goTo... functions are convenient wrapper for replaceActivity()
   void goToFileTransfer();
+  void goToTextEditor();
   void goToSettings();
   void goToFileBrowser(std::string path = {});
   void goToRecentBooks();
