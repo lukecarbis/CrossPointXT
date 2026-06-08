@@ -14,10 +14,19 @@ class TextEditorActivity final : public Activity {
   static constexpr size_t MAX_TEXT_BYTES = 64 * 1024;
   static constexpr unsigned long AUTOSAVE_DELAY_MS = 2000;
   static constexpr unsigned long SIDE_BUTTON_HOLD_MS = 700;
+  static constexpr unsigned long CURSOR_WORD_HOLD_MS = 1000;
+  static constexpr unsigned long CURSOR_WORD_REPEAT_MS = 1000;
 
   struct DisplayLine {
     std::string text;
     size_t currentStart = std::string::npos;
+    size_t currentEnd = std::string::npos;
+    size_t cursorOffset = std::string::npos;
+  };
+
+  struct SentenceRange {
+    size_t start = 0;
+    size_t end = std::string::npos;
   };
 
   struct NoteFile {
@@ -31,11 +40,15 @@ class TextEditorActivity final : public Activity {
   std::string currentNotePath;
   std::string currentNoteName;
   std::string pendingFileName;
+  size_t cursorLineIndex = 0;
+  size_t cursorByteIndex = 0;
   int currentNoteIndex = -1;
   bool dirty = false;
   bool saveFailed = false;
   bool creatingNewFile = false;
+  int cursorWordHoldDirection = 0;
   unsigned long lastEditAt = 0;
+  unsigned long nextCursorWordMoveAt = 0;
   uint32_t lastKeyboardStatusVersion = 0;
 
   void loadInitialDocument();
@@ -55,11 +68,23 @@ class TextEditorActivity final : public Activity {
   static std::string sanitizeFileName(const std::string& input);
   static bool hasNoteExtension(const char* name);
   static uint32_t modifiedSortKey(const HalFile& file);
-  static size_t currentSentenceStart(const std::string& line);
+  static SentenceRange currentSentenceRange(const std::string& line, size_t cursor);
+  static bool isUtf8Continuation(unsigned char c);
+  static size_t previousUtf8Boundary(const std::string& text, size_t index);
+  static size_t nextUtf8Boundary(const std::string& text, size_t index);
+  static size_t clampUtf8Boundary(const std::string& text, size_t index);
+  void setCursorToEnd();
+  void ensureCursorValid();
   void markDirty();
   bool handlePairingControls();
   void showConnectingNotice();
   void handleKeyEvent();
+  bool handleCursorControls();
+  void moveCursorLeft();
+  void moveCursorRight();
+  void moveCursorWordLeft();
+  void moveCursorWordRight();
+  void moveCursorVertical(int direction);
   void insertChar(char c);
   void insertText(const char* text);
   void insertNewLine();
@@ -67,6 +92,7 @@ class TextEditorActivity final : public Activity {
   void deleteWord();
   size_t byteCount() const;
   std::vector<DisplayLine> buildDisplayLines(int maxWidth) const;
+  int textCursorWidth(int fontId, const std::string& text) const;
   void drawDisplayLine(int fontId, int x, int y, const DisplayLine& line) const;
   int renderCandidatePicker(int x, int y, int maxWidth);
   void renderNewFilePrompt(int pageWidth, int pageHeight);

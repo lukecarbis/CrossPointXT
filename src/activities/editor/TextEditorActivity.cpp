@@ -58,7 +58,7 @@ void TextEditorActivity::loop() {
   if (creatingNewFile) {
     handleNewFilePromptControls();
     handleNewFilePromptKeyEvent();
-  } else if (!handlePairingControls() && !handleDocumentControls()) {
+  } else if (!handlePairingControls() && !handleDocumentControls() && !handleCursorControls()) {
     handleKeyEvent();
   }
 
@@ -90,9 +90,17 @@ void TextEditorActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
   const std::vector<DisplayLine> displayLines = buildDisplayLines(contentWidth);
+  int cursorDisplayIndex = static_cast<int>(displayLines.size()) - 1;
+  for (size_t i = 0; i < displayLines.size(); i++) {
+    if (displayLines[i].cursorOffset != std::string::npos) {
+      cursorDisplayIndex = static_cast<int>(i);
+      break;
+    }
+  }
+
   int y = bottomY;
-  for (auto it = displayLines.rbegin(); it != displayLines.rend() && y >= EDITOR_MARGIN_TOP + pickerHeight; ++it) {
-    drawDisplayLine(EDITOR_FONT_ID, EDITOR_MARGIN_X, y, *it);
+  for (int i = cursorDisplayIndex; i >= 0 && y >= EDITOR_MARGIN_TOP + pickerHeight; i--) {
+    drawDisplayLine(EDITOR_FONT_ID, EDITOR_MARGIN_X, y, displayLines[i]);
     y -= lineHeight;
   }
 
@@ -163,6 +171,7 @@ void TextEditorActivity::loadCurrentDocument() {
     }
   }
   lines.push_back(current);
+  setCursorToEnd();
 
   dirty = false;
   saveFailed = false;
@@ -328,6 +337,55 @@ bool TextEditorActivity::handleDocumentControls() {
   return false;
 }
 
+bool TextEditorActivity::handleCursorControls() {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
+    moveCursorLeft();
+    cursorWordHoldDirection = -1;
+    nextCursorWordMoveAt = millis() + CURSOR_WORD_HOLD_MS;
+    requestUpdate();
+    return true;
+  }
+
+  if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+    moveCursorRight();
+    cursorWordHoldDirection = 1;
+    nextCursorWordMoveAt = millis() + CURSOR_WORD_HOLD_MS;
+    requestUpdate();
+    return true;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+      mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    cursorWordHoldDirection = 0;
+    nextCursorWordMoveAt = 0;
+    return false;
+  }
+
+  if (cursorWordHoldDirection != 0) {
+    const MappedInputManager::Button heldButton =
+        cursorWordHoldDirection < 0 ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
+    if (!mappedInput.isPressed(heldButton)) {
+      cursorWordHoldDirection = 0;
+      nextCursorWordMoveAt = 0;
+      return false;
+    }
+
+    const unsigned long now = millis();
+    if (mappedInput.getHeldTime() >= CURSOR_WORD_HOLD_MS && static_cast<long>(now - nextCursorWordMoveAt) >= 0) {
+      if (cursorWordHoldDirection < 0) {
+        moveCursorWordLeft();
+      } else {
+        moveCursorWordRight();
+      }
+      nextCursorWordMoveAt = now + CURSOR_WORD_REPEAT_MS;
+      requestUpdate();
+      return true;
+    }
+  }
+
+  return false;
+}
+
 bool TextEditorActivity::handleNewFilePromptControls() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     cancelNewFilePrompt();
@@ -447,8 +505,10 @@ uint32_t TextEditorActivity::modifiedSortKey(const HalFile& file) {
   return (static_cast<uint32_t>(date) << 16) | time;
 }
 
-size_t TextEditorActivity::currentSentenceStart(const std::string& line) {
-  size_t start = 0;
+TextEditorActivity::SentenceRange TextEditorActivity::currentSentenceRange(const std::string& line,
+                                                                           const size_t cursor) {
+  std::vector<size_t> starts;
+  starts.push_back(0);
 
   for (size_t terminator = 0; terminator < line.size();) {
     if (!isSentenceTerminator(line[terminator])) {
@@ -466,12 +526,66 @@ size_t TextEditorActivity::currentSentenceStart(const std::string& line) {
       nextSentence++;
     }
     if (nextSentence < line.size()) {
-      start = punctuationEnd;
+      starts.push_back(punctuationEnd);
     }
 
     terminator = punctuationEnd;
   }
-  return start;
+
+  const size_t safeCursor = std::min(cursor, line.size());
+  SentenceRange range;
+  for (size_t i = 0; i < starts.size(); i++) {
+    if (starts[i] <= safeCursor) {
+      range.start = starts[i];
+      range.end = i + 1 < starts.size() ? starts[i + 1] : std::string::npos;
+    }
+  }
+  return range;
+}
+
+bool TextEditorActivity::isUtf8Continuation(const unsigned char c) { return (c & 0xC0) == 0x80; }
+
+size_t TextEditorActivity::previousUtf8Boundary(const std::string& text, size_t index) {
+  if (index == 0 || text.empty()) return 0;
+  index = std::min(index, text.size());
+  index--;
+  while (index > 0 && isUtf8Continuation(static_cast<unsigned char>(text[index]))) {
+    index--;
+  }
+  return index;
+}
+
+size_t TextEditorActivity::nextUtf8Boundary(const std::string& text, size_t index) {
+  if (index >= text.size()) return text.size();
+  const unsigned char* ptr = reinterpret_cast<const unsigned char*>(text.c_str() + index);
+  utf8NextCodepoint(&ptr);
+  return static_cast<size_t>(reinterpret_cast<const char*>(ptr) - text.c_str());
+}
+
+size_t TextEditorActivity::clampUtf8Boundary(const std::string& text, size_t index) {
+  index = std::min(index, text.size());
+  while (index > 0 && isUtf8Continuation(static_cast<unsigned char>(text[index]))) {
+    index--;
+  }
+  return index;
+}
+
+void TextEditorActivity::setCursorToEnd() {
+  if (lines.empty()) {
+    lines.push_back("");
+  }
+  cursorLineIndex = lines.size() - 1;
+  cursorByteIndex = lines.back().size();
+}
+
+void TextEditorActivity::ensureCursorValid() {
+  if (lines.empty()) {
+    lines.push_back("");
+  }
+  if (cursorLineIndex >= lines.size()) {
+    cursorLineIndex = lines.size() - 1;
+  }
+  cursorByteIndex = clampUtf8Boundary(lines[cursorLineIndex], cursorByteIndex);
 }
 
 void TextEditorActivity::markDirty() {
@@ -564,6 +678,22 @@ void TextEditorActivity::handleKeyEvent() {
         deleteWord();
         changed = true;
         break;
+      case BluetoothKeyboardInput::KeyType::Left:
+        moveCursorLeft();
+        changed = true;
+        break;
+      case BluetoothKeyboardInput::KeyType::Right:
+        moveCursorRight();
+        changed = true;
+        break;
+      case BluetoothKeyboardInput::KeyType::Up:
+        moveCursorVertical(-1);
+        changed = true;
+        break;
+      case BluetoothKeyboardInput::KeyType::Down:
+        moveCursorVertical(1);
+        changed = true;
+        break;
       case BluetoothKeyboardInput::KeyType::Escape:
         onGoHome();
         return;
@@ -575,10 +705,91 @@ void TextEditorActivity::handleKeyEvent() {
   if (changed) requestUpdate();
 }
 
+void TextEditorActivity::moveCursorLeft() {
+  ensureCursorValid();
+  if (cursorByteIndex > 0) {
+    cursorByteIndex = previousUtf8Boundary(lines[cursorLineIndex], cursorByteIndex);
+  } else if (cursorLineIndex > 0) {
+    cursorLineIndex--;
+    cursorByteIndex = lines[cursorLineIndex].size();
+  }
+}
+
+void TextEditorActivity::moveCursorRight() {
+  ensureCursorValid();
+  if (cursorByteIndex < lines[cursorLineIndex].size()) {
+    cursorByteIndex = nextUtf8Boundary(lines[cursorLineIndex], cursorByteIndex);
+  } else if (cursorLineIndex + 1 < lines.size()) {
+    cursorLineIndex++;
+    cursorByteIndex = 0;
+  }
+}
+
+void TextEditorActivity::moveCursorWordLeft() {
+  ensureCursorValid();
+
+  while (cursorByteIndex == 0) {
+    if (cursorLineIndex == 0) return;
+    cursorLineIndex--;
+    cursorByteIndex = lines[cursorLineIndex].size();
+  }
+
+  std::string& line = lines[cursorLineIndex];
+  while (cursorByteIndex > 0 &&
+         std::isspace(static_cast<unsigned char>(line[previousUtf8Boundary(line, cursorByteIndex)]))) {
+    cursorByteIndex = previousUtf8Boundary(line, cursorByteIndex);
+  }
+
+  while (cursorByteIndex > 0 &&
+         !std::isspace(static_cast<unsigned char>(line[previousUtf8Boundary(line, cursorByteIndex)]))) {
+    cursorByteIndex = previousUtf8Boundary(line, cursorByteIndex);
+  }
+}
+
+void TextEditorActivity::moveCursorWordRight() {
+  ensureCursorValid();
+
+  while (cursorByteIndex >= lines[cursorLineIndex].size()) {
+    if (cursorLineIndex + 1 >= lines.size()) return;
+    cursorLineIndex++;
+    cursorByteIndex = 0;
+  }
+
+  std::string& line = lines[cursorLineIndex];
+  while (cursorByteIndex < line.size() && std::isspace(static_cast<unsigned char>(line[cursorByteIndex]))) {
+    cursorByteIndex = nextUtf8Boundary(line, cursorByteIndex);
+  }
+
+  while (cursorByteIndex < line.size() && !std::isspace(static_cast<unsigned char>(line[cursorByteIndex]))) {
+    cursorByteIndex = nextUtf8Boundary(line, cursorByteIndex);
+  }
+}
+
+void TextEditorActivity::moveCursorVertical(const int direction) {
+  ensureCursorValid();
+  if (direction < 0) {
+    if (cursorLineIndex == 0) {
+      cursorByteIndex = 0;
+      return;
+    }
+    cursorLineIndex--;
+  } else if (direction > 0) {
+    if (cursorLineIndex + 1 >= lines.size()) {
+      cursorByteIndex = lines[cursorLineIndex].size();
+      return;
+    }
+    cursorLineIndex++;
+  } else {
+    return;
+  }
+  cursorByteIndex = clampUtf8Boundary(lines[cursorLineIndex], cursorByteIndex);
+}
+
 void TextEditorActivity::insertChar(const char c) {
   if (c == '\0' || byteCount() >= MAX_TEXT_BYTES) return;
-  if (lines.empty()) lines.push_back("");
-  lines.back().push_back(c);
+  ensureCursorValid();
+  lines[cursorLineIndex].insert(cursorByteIndex, 1, c);
+  cursorByteIndex++;
   markDirty();
 }
 
@@ -587,66 +798,73 @@ void TextEditorActivity::insertText(const char* text) {
   const size_t currentBytes = byteCount();
   if (currentBytes >= MAX_TEXT_BYTES) return;
 
-  if (lines.empty()) lines.push_back("");
+  ensureCursorValid();
   const size_t available = MAX_TEXT_BYTES - currentBytes;
   const size_t requested = std::min(std::strlen(text), available);
   const int safeLength = utf8SafeTruncateBuffer(text, static_cast<int>(requested));
   if (safeLength <= 0) {
     return;
   }
-  lines.back().append(text, static_cast<size_t>(safeLength));
+  lines[cursorLineIndex].insert(cursorByteIndex, text, static_cast<size_t>(safeLength));
+  cursorByteIndex += static_cast<size_t>(safeLength);
   markDirty();
 }
 
 void TextEditorActivity::insertNewLine() {
   if (byteCount() >= MAX_TEXT_BYTES) return;
-  lines.push_back("");
+  ensureCursorValid();
+  std::string remainder = lines[cursorLineIndex].substr(cursorByteIndex);
+  lines[cursorLineIndex].erase(cursorByteIndex);
+  cursorLineIndex++;
+  lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(cursorLineIndex), remainder);
+  cursorByteIndex = 0;
   markDirty();
 }
 
 void TextEditorActivity::backspace() {
-  if (lines.empty()) {
-    lines.push_back("");
-    return;
-  }
-  if (!lines.back().empty()) {
-    utf8RemoveLastChar(lines.back());
+  ensureCursorValid();
+  if (cursorByteIndex > 0) {
+    const size_t previous = previousUtf8Boundary(lines[cursorLineIndex], cursorByteIndex);
+    lines[cursorLineIndex].erase(previous, cursorByteIndex - previous);
+    cursorByteIndex = previous;
     markDirty();
     return;
   }
-  if (lines.size() > 1) {
-    lines.pop_back();
+
+  if (cursorLineIndex > 0) {
+    const std::string current = lines[cursorLineIndex];
+    cursorLineIndex--;
+    cursorByteIndex = lines[cursorLineIndex].size();
+    lines[cursorLineIndex] += current;
+    lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(cursorLineIndex + 1));
     markDirty();
   }
 }
 
 void TextEditorActivity::deleteWord() {
-  if (lines.empty()) {
-    lines.push_back("");
+  ensureCursorValid();
+  if (cursorByteIndex == 0) {
+    backspace();
     return;
   }
 
-  std::string& line = lines.back();
-  if (line.empty()) {
-    if (lines.size() > 1) {
-      lines.pop_back();
-      markDirty();
-    }
-    return;
-  }
-
+  std::string& line = lines[cursorLineIndex];
+  const size_t originalCursor = cursorByteIndex;
+  size_t deleteStart = cursorByteIndex;
   bool removed = false;
-  while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) {
-    utf8RemoveLastChar(line);
+  while (deleteStart > 0 && std::isspace(static_cast<unsigned char>(line[previousUtf8Boundary(line, deleteStart)]))) {
+    deleteStart = previousUtf8Boundary(line, deleteStart);
     removed = true;
   }
 
-  while (!line.empty() && !std::isspace(static_cast<unsigned char>(line.back()))) {
-    utf8RemoveLastChar(line);
+  while (deleteStart > 0 && !std::isspace(static_cast<unsigned char>(line[previousUtf8Boundary(line, deleteStart)]))) {
+    deleteStart = previousUtf8Boundary(line, deleteStart);
     removed = true;
   }
 
   if (removed) {
+    line.erase(deleteStart, originalCursor - deleteStart);
+    cursorByteIndex = deleteStart;
     markDirty();
   }
 }
@@ -660,14 +878,16 @@ size_t TextEditorActivity::byteCount() const {
 std::vector<TextEditorActivity::DisplayLine> TextEditorActivity::buildDisplayLines(const int maxWidth) const {
   std::vector<DisplayLine> displayLines;
   if (lines.empty()) {
-    displayLines.push_back(DisplayLine{"", 0});
+    displayLines.push_back(DisplayLine{"", 0, std::string::npos, std::string::npos});
     return displayLines;
   }
 
-  const auto appendWrapped = [&](const std::string& text, const size_t currentStart) {
+  const bool hideCursorAtDocumentEnd = cursorLineIndex == lines.size() - 1 && cursorByteIndex == lines.back().size();
+  const auto appendWrapped = [&](const std::string& text, const SentenceRange currentRange, const bool isCursorLine) {
     const auto wrapped = renderer.wrappedText(EDITOR_FONT_ID, text.c_str(), maxWidth, 16);
     if (wrapped.empty()) {
-      displayLines.push_back(DisplayLine{"", currentStart == std::string::npos ? std::string::npos : 0});
+      displayLines.push_back(DisplayLine{"", isCursorLine ? 0 : std::string::npos, std::string::npos,
+                                         isCursorLine && !hideCursorAtDocumentEnd ? 0 : std::string::npos});
       return;
     }
 
@@ -680,54 +900,95 @@ std::vector<TextEditorActivity::DisplayLine> TextEditorActivity::buildDisplayLin
       const size_t lineEnd = lineStart + wrappedLine.size();
 
       size_t lineCurrentStart = std::string::npos;
-      if (currentStart != std::string::npos) {
-        if (currentStart <= lineStart) {
-          lineCurrentStart = 0;
-        } else if (currentStart < lineEnd) {
-          lineCurrentStart = currentStart - lineStart;
+      size_t lineCurrentEnd = std::string::npos;
+      const size_t currentEnd = currentRange.end == std::string::npos ? text.size() : currentRange.end;
+      if (currentRange.start < lineEnd && currentEnd > lineStart) {
+        lineCurrentStart = currentRange.start <= lineStart ? 0 : currentRange.start - lineStart;
+        if (currentEnd < lineEnd) {
+          lineCurrentEnd = currentEnd - lineStart;
         }
       }
 
-      displayLines.push_back(DisplayLine{wrappedLine, lineCurrentStart});
+      size_t lineCursorOffset = std::string::npos;
+      if (isCursorLine && !hideCursorAtDocumentEnd) {
+        const bool isFinalWrappedLine = lineEnd >= text.size();
+        const bool cursorOnLine = cursorByteIndex >= lineStart && cursorByteIndex < lineEnd;
+        const bool cursorAtLineEnd = cursorByteIndex == lineEnd && isFinalWrappedLine;
+        if (cursorOnLine || cursorAtLineEnd) {
+          lineCursorOffset = std::min(cursorByteIndex, lineEnd) - lineStart;
+        }
+      }
+
+      displayLines.push_back(DisplayLine{wrappedLine, lineCurrentStart, lineCurrentEnd, lineCursorOffset});
       searchFrom = lineEnd;
       while (searchFrom < text.size() && text[searchFrom] == ' ') {
         searchFrom++;
+      }
+      if (isCursorLine && !hideCursorAtDocumentEnd && lineCursorOffset == std::string::npos &&
+          cursorByteIndex > lineEnd && cursorByteIndex <= searchFrom) {
+        displayLines.back().text += text.substr(lineEnd, cursorByteIndex - lineEnd);
+        displayLines.back().cursorOffset = displayLines.back().text.size();
       }
     }
   };
 
   for (size_t i = 0; i < lines.size(); i++) {
-    const bool isCurrent = i == lines.size() - 1;
+    const bool isCurrent = i == cursorLineIndex;
     if (!isCurrent) {
-      appendWrapped(lines[i], std::string::npos);
+      appendWrapped(lines[i], SentenceRange{std::string::npos, std::string::npos}, false);
       continue;
     }
 
-    appendWrapped(lines[i], currentSentenceStart(lines[i]));
+    appendWrapped(lines[i], currentSentenceRange(lines[i], cursorByteIndex), true);
   }
   return displayLines;
+}
+
+int TextEditorActivity::textCursorWidth(const int fontId, const std::string& text) const {
+  if (text.empty()) return 0;
+
+  size_t visibleEnd = text.size();
+  size_t trailingSpaces = 0;
+  while (visibleEnd > 0 && text[visibleEnd - 1] == ' ') {
+    visibleEnd--;
+    trailingSpaces++;
+  }
+
+  int width = 0;
+  if (visibleEnd > 0) {
+    width = renderer.getTextWidth(fontId, text.substr(0, visibleEnd).c_str());
+  }
+
+  if (trailingSpaces > 0) {
+    const int singleSpaceWidth = renderer.getTextWidth(fontId, "n n") - renderer.getTextWidth(fontId, "nn");
+    width += std::max(1, singleSpaceWidth) * static_cast<int>(trailingSpaces);
+  }
+  return width;
 }
 
 void TextEditorActivity::drawDisplayLine(const int fontId, const int x, const int y, const DisplayLine& line) const {
   const std::string text = line.text.empty() ? " " : line.text;
   if (line.currentStart == std::string::npos) {
     drawGrayTextLine(fontId, x, y, text);
-    return;
-  }
-
-  if (line.currentStart >= text.size()) {
-    drawGrayTextLine(fontId, x, y, text);
-    return;
-  }
-
-  if (line.currentStart == 0) {
+  } else {
     renderer.drawText(fontId, x, y, text.c_str(), true);
-    return;
+    if (line.currentStart > 0) {
+      drawGrayTextLine(fontId, x, y, text.substr(0, line.currentStart));
+    }
+    if (line.currentEnd != std::string::npos && line.currentEnd < text.size()) {
+      const std::string beforeSuffix = text.substr(0, line.currentEnd);
+      const int suffixX = x + renderer.getTextWidth(fontId, beforeSuffix.c_str());
+      drawGrayTextLine(fontId, suffixX, y, text.substr(line.currentEnd));
+    }
   }
 
-  const std::string prefix = text.substr(0, line.currentStart);
-  renderer.drawText(fontId, x, y, text.c_str(), true);
-  drawGrayTextLine(fontId, x, y, prefix);
+  if (line.cursorOffset != std::string::npos) {
+    const std::string beforeCursor = text.substr(0, std::min(line.cursorOffset, text.size()));
+    const int cursorX = x + textCursorWidth(fontId, beforeCursor);
+    const int height = renderer.getLineHeight(fontId);
+    renderer.drawLine(cursorX, y, cursorX, y + height - 1, true);
+    renderer.drawLine(cursorX + 1, y, cursorX + 1, y + height - 1, true);
+  }
 }
 
 int TextEditorActivity::renderCandidatePicker(const int x, const int y, const int maxWidth) {
