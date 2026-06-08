@@ -164,8 +164,28 @@ git submodule update --init --recursive
 
 ### Build / flash / monitor
 
+If you are using the local Python virtual environment, activate it first:
+
+```bash
+source .venv/bin/activate
+```
+
+Plug the X3 in over USB with a data-capable cable, then flash the firmware:
+
 ```bash
 pio run --target upload
+```
+
+To watch serial logs after flashing:
+
+```bash
+pio device monitor
+```
+
+For the enhanced debug monitor:
+
+```bash
+python3 scripts/debugging_monitor.py
 ```
 
 ### Contributor pre-PR checks

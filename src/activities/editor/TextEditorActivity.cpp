@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstring>
 
+#include "Utf8.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "input/BluetoothKeyboardInput.h"
@@ -22,6 +23,8 @@ constexpr int EDITOR_MARGIN_TOP = 26;
 constexpr int EDITOR_MARGIN_BOTTOM = 40;
 constexpr int LINE_GAP = 4;
 constexpr int MAX_VISIBLE_CANDIDATES = 5;
+
+bool isSentenceTerminator(const char c) { return c == '.' || c == '!' || c == '?'; }
 }  // namespace
 
 void TextEditorActivity::onEnter() {
@@ -89,12 +92,7 @@ void TextEditorActivity::render(RenderLock&&) {
   const std::vector<DisplayLine> displayLines = buildDisplayLines(contentWidth);
   int y = bottomY;
   for (auto it = displayLines.rbegin(); it != displayLines.rend() && y >= EDITOR_MARGIN_TOP + pickerHeight; ++it) {
-    const std::string text = it->text.empty() ? " " : it->text;
-    if (it->current) {
-      renderer.drawText(EDITOR_FONT_ID, EDITOR_MARGIN_X, y, text.c_str(), true);
-    } else {
-      drawGrayTextLine(EDITOR_FONT_ID, EDITOR_MARGIN_X, y, text);
-    }
+    drawDisplayLine(EDITOR_FONT_ID, EDITOR_MARGIN_X, y, *it);
     y -= lineHeight;
   }
 
@@ -350,7 +348,12 @@ void TextEditorActivity::handleNewFilePromptKeyEvent() {
   while (BT_KEYBOARD.popEvent(event)) {
     switch (event.type) {
       case BluetoothKeyboardInput::KeyType::Character:
-        if (pendingFileName.size() < 64) {
+        if (event.text[0] != '\0') {
+          if (pendingFileName.size() + std::strlen(event.text) <= 64) {
+            pendingFileName += event.text;
+            changed = true;
+          }
+        } else if (pendingFileName.size() < 64) {
           pendingFileName.push_back(event.character);
           changed = true;
         }
@@ -367,7 +370,17 @@ void TextEditorActivity::handleNewFilePromptKeyEvent() {
       case BluetoothKeyboardInput::KeyType::Backspace:
       case BluetoothKeyboardInput::KeyType::DeleteKey:
         if (!pendingFileName.empty()) {
-          pendingFileName.pop_back();
+          utf8RemoveLastChar(pendingFileName);
+          changed = true;
+        }
+        break;
+      case BluetoothKeyboardInput::KeyType::DeleteWord:
+        while (!pendingFileName.empty() && std::isspace(static_cast<unsigned char>(pendingFileName.back()))) {
+          utf8RemoveLastChar(pendingFileName);
+          changed = true;
+        }
+        while (!pendingFileName.empty() && !std::isspace(static_cast<unsigned char>(pendingFileName.back()))) {
+          utf8RemoveLastChar(pendingFileName);
           changed = true;
         }
         break;
@@ -432,6 +445,33 @@ uint32_t TextEditorActivity::modifiedSortKey(const HalFile& file) {
     return 0;
   }
   return (static_cast<uint32_t>(date) << 16) | time;
+}
+
+size_t TextEditorActivity::currentSentenceStart(const std::string& line) {
+  size_t start = 0;
+
+  for (size_t terminator = 0; terminator < line.size();) {
+    if (!isSentenceTerminator(line[terminator])) {
+      terminator++;
+      continue;
+    }
+
+    size_t punctuationEnd = terminator + 1;
+    while (punctuationEnd < line.size() && isSentenceTerminator(line[punctuationEnd])) {
+      punctuationEnd++;
+    }
+
+    size_t nextSentence = punctuationEnd;
+    while (nextSentence < line.size() && std::isspace(static_cast<unsigned char>(line[nextSentence]))) {
+      nextSentence++;
+    }
+    if (nextSentence < line.size()) {
+      start = punctuationEnd;
+    }
+
+    terminator = punctuationEnd;
+  }
+  return start;
 }
 
 void TextEditorActivity::markDirty() {
@@ -500,7 +540,11 @@ void TextEditorActivity::handleKeyEvent() {
   while (BT_KEYBOARD.popEvent(event)) {
     switch (event.type) {
       case BluetoothKeyboardInput::KeyType::Character:
-        insertChar(event.character);
+        if (event.text[0] != '\0') {
+          insertText(event.text);
+        } else {
+          insertChar(event.character);
+        }
         changed = true;
         break;
       case BluetoothKeyboardInput::KeyType::Tab:
@@ -514,6 +558,10 @@ void TextEditorActivity::handleKeyEvent() {
       case BluetoothKeyboardInput::KeyType::Backspace:
       case BluetoothKeyboardInput::KeyType::DeleteKey:
         backspace();
+        changed = true;
+        break;
+      case BluetoothKeyboardInput::KeyType::DeleteWord:
+        deleteWord();
         changed = true;
         break;
       case BluetoothKeyboardInput::KeyType::Escape:
@@ -536,9 +584,18 @@ void TextEditorActivity::insertChar(const char c) {
 
 void TextEditorActivity::insertText(const char* text) {
   if (!text) return;
-  while (*text && byteCount() < MAX_TEXT_BYTES) {
-    insertChar(*text++);
+  const size_t currentBytes = byteCount();
+  if (currentBytes >= MAX_TEXT_BYTES) return;
+
+  if (lines.empty()) lines.push_back("");
+  const size_t available = MAX_TEXT_BYTES - currentBytes;
+  const size_t requested = std::min(std::strlen(text), available);
+  const int safeLength = utf8SafeTruncateBuffer(text, static_cast<int>(requested));
+  if (safeLength <= 0) {
+    return;
   }
+  lines.back().append(text, static_cast<size_t>(safeLength));
+  markDirty();
 }
 
 void TextEditorActivity::insertNewLine() {
@@ -553,12 +610,43 @@ void TextEditorActivity::backspace() {
     return;
   }
   if (!lines.back().empty()) {
-    lines.back().pop_back();
+    utf8RemoveLastChar(lines.back());
     markDirty();
     return;
   }
   if (lines.size() > 1) {
     lines.pop_back();
+    markDirty();
+  }
+}
+
+void TextEditorActivity::deleteWord() {
+  if (lines.empty()) {
+    lines.push_back("");
+    return;
+  }
+
+  std::string& line = lines.back();
+  if (line.empty()) {
+    if (lines.size() > 1) {
+      lines.pop_back();
+      markDirty();
+    }
+    return;
+  }
+
+  bool removed = false;
+  while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) {
+    utf8RemoveLastChar(line);
+    removed = true;
+  }
+
+  while (!line.empty() && !std::isspace(static_cast<unsigned char>(line.back()))) {
+    utf8RemoveLastChar(line);
+    removed = true;
+  }
+
+  if (removed) {
     markDirty();
   }
 }
@@ -572,22 +660,74 @@ size_t TextEditorActivity::byteCount() const {
 std::vector<TextEditorActivity::DisplayLine> TextEditorActivity::buildDisplayLines(const int maxWidth) const {
   std::vector<DisplayLine> displayLines;
   if (lines.empty()) {
-    displayLines.push_back(DisplayLine{"", true});
+    displayLines.push_back(DisplayLine{"", 0});
     return displayLines;
   }
 
+  const auto appendWrapped = [&](const std::string& text, const size_t currentStart) {
+    const auto wrapped = renderer.wrappedText(EDITOR_FONT_ID, text.c_str(), maxWidth, 16);
+    if (wrapped.empty()) {
+      displayLines.push_back(DisplayLine{"", currentStart == std::string::npos ? std::string::npos : 0});
+      return;
+    }
+
+    size_t searchFrom = 0;
+    for (const auto& wrappedLine : wrapped) {
+      size_t lineStart = text.find(wrappedLine, searchFrom);
+      if (lineStart == std::string::npos) {
+        lineStart = searchFrom;
+      }
+      const size_t lineEnd = lineStart + wrappedLine.size();
+
+      size_t lineCurrentStart = std::string::npos;
+      if (currentStart != std::string::npos) {
+        if (currentStart <= lineStart) {
+          lineCurrentStart = 0;
+        } else if (currentStart < lineEnd) {
+          lineCurrentStart = currentStart - lineStart;
+        }
+      }
+
+      displayLines.push_back(DisplayLine{wrappedLine, lineCurrentStart});
+      searchFrom = lineEnd;
+      while (searchFrom < text.size() && text[searchFrom] == ' ') {
+        searchFrom++;
+      }
+    }
+  };
+
   for (size_t i = 0; i < lines.size(); i++) {
     const bool isCurrent = i == lines.size() - 1;
-    const auto wrapped = renderer.wrappedText(EDITOR_FONT_ID, lines[i].c_str(), maxWidth, 16);
-    if (wrapped.empty()) {
-      displayLines.push_back(DisplayLine{"", isCurrent});
+    if (!isCurrent) {
+      appendWrapped(lines[i], std::string::npos);
       continue;
     }
-    for (const auto& wrappedLine : wrapped) {
-      displayLines.push_back(DisplayLine{wrappedLine, isCurrent});
-    }
+
+    appendWrapped(lines[i], currentSentenceStart(lines[i]));
   }
   return displayLines;
+}
+
+void TextEditorActivity::drawDisplayLine(const int fontId, const int x, const int y, const DisplayLine& line) const {
+  const std::string text = line.text.empty() ? " " : line.text;
+  if (line.currentStart == std::string::npos) {
+    drawGrayTextLine(fontId, x, y, text);
+    return;
+  }
+
+  if (line.currentStart >= text.size()) {
+    drawGrayTextLine(fontId, x, y, text);
+    return;
+  }
+
+  if (line.currentStart == 0) {
+    renderer.drawText(fontId, x, y, text.c_str(), true);
+    return;
+  }
+
+  const std::string prefix = text.substr(0, line.currentStart);
+  renderer.drawText(fontId, x, y, text.c_str(), true);
+  drawGrayTextLine(fontId, x, y, prefix);
 }
 
 int TextEditorActivity::renderCandidatePicker(const int x, const int y, const int maxWidth) {

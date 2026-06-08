@@ -155,7 +155,7 @@ int utf8SafeTruncateBuffer(const char* buf, int len) {
   int expectedLen = utf8CodepointLen(static_cast<unsigned char>(buf[leadPos]));
   int actualLen = len - leadPos;
 
-  if (actualLen < expectedLen && leadPos > 0) {
+  if (actualLen < expectedLen) {
     // Incomplete UTF-8 sequence at the end — exclude it
     return leadPos;
   }

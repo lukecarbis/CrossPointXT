@@ -17,7 +17,7 @@ class TextEditorActivity final : public Activity {
 
   struct DisplayLine {
     std::string text;
-    bool current = false;
+    size_t currentStart = std::string::npos;
   };
 
   struct NoteFile {
@@ -55,6 +55,7 @@ class TextEditorActivity final : public Activity {
   static std::string sanitizeFileName(const std::string& input);
   static bool hasNoteExtension(const char* name);
   static uint32_t modifiedSortKey(const HalFile& file);
+  static size_t currentSentenceStart(const std::string& line);
   void markDirty();
   bool handlePairingControls();
   void showConnectingNotice();
@@ -63,8 +64,10 @@ class TextEditorActivity final : public Activity {
   void insertText(const char* text);
   void insertNewLine();
   void backspace();
+  void deleteWord();
   size_t byteCount() const;
   std::vector<DisplayLine> buildDisplayLines(int maxWidth) const;
+  void drawDisplayLine(int fontId, int x, int y, const DisplayLine& line) const;
   int renderCandidatePicker(int x, int y, int maxWidth);
   void renderNewFilePrompt(int pageWidth, int pageHeight);
   void drawGrayBackground(int x, int y, int width, int height) const;

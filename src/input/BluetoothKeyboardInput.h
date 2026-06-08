@@ -6,11 +6,24 @@
 
 class BluetoothKeyboardInput {
  public:
-  enum class KeyType : uint8_t { Character, Enter, Backspace, Tab, Escape, Left, Right, Up, Down, DeleteKey };
+  enum class KeyType : uint8_t {
+    Character,
+    Enter,
+    Backspace,
+    Tab,
+    Escape,
+    Left,
+    Right,
+    Up,
+    Down,
+    DeleteKey,
+    DeleteWord
+  };
 
   struct KeyEvent {
     KeyType type = KeyType::Character;
     char character = '\0';
+    char text[8] = {};
   };
 
   struct Candidate {
@@ -70,16 +83,26 @@ class BluetoothKeyboardInput {
   volatile uint8_t queueHead = 0;
   volatile uint8_t queueTail = 0;
   uint8_t previousKeys[6] = {};
+  bool deleteKeyHeld = false;
+  bool deleteKeyDidWordDelete = false;
+  uint8_t heldDeleteKeyCode = 0;
+  unsigned long deleteKeyHoldStartedAt = 0;
+  unsigned long nextDeleteWordAt = 0;
 
   void loadSavedKeyboard();
   void recordCandidate(const Candidate& candidate);
   void requestAutoConnect(const Candidate& candidate);
   void clearQueue();
   void pushEvent(KeyEvent event);
+  void pushTextEvent(const char* text);
   void bumpStatus();
   void handleBootKeyboardReport(const uint8_t* data, size_t length);
   void emitKey(uint8_t keyCode, uint8_t modifiers);
+  void updateDeleteKeyHold(bool deleteKeyDown, uint8_t deleteKeyCode);
+  void processDeleteKeyHold();
+  static const char* optionKeyToUtf8(uint8_t keyCode, bool shifted);
   static char keyCodeToAscii(uint8_t keyCode, bool shifted);
+  static bool isDeleteKey(uint8_t keyCode);
   static bool keyAlreadyDown(uint8_t keyCode, const uint8_t* keys);
 
   friend void bluetoothKeyboardInputHandleReport(const uint8_t* data, size_t length);

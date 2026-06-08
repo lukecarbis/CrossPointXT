@@ -39,6 +39,8 @@ constexpr unsigned long SCAN_INTERVAL_MS = 30000;
 constexpr unsigned long SAVED_KEYBOARD_SCAN_INTERVAL_MS = 1000;
 constexpr unsigned long SCAN_DURATION_MS = 8000;
 constexpr uint32_t CONNECT_TIMEOUT_MS = 8000;
+constexpr unsigned long DELETE_WORD_HOLD_DELAY_MS = 1000;
+constexpr unsigned long DELETE_WORD_REPEAT_MS = 1000;
 
 portMUX_TYPE queueMux = portMUX_INITIALIZER_UNLOCKED;
 portMUX_TYPE stateMux = portMUX_INITIALIZER_UNLOCKED;
@@ -285,6 +287,9 @@ void BluetoothKeyboardInput::begin() {
   candidatesSeen = 0;
   hasPendingAutoConnect = false;
   pendingAutoConnectDeferred = false;
+  deleteKeyHeld = false;
+  deleteKeyDidWordDelete = false;
+  heldDeleteKeyCode = 0;
   bumpStatus();
 
 #if CROSSPOINT_HAS_NIMBLE
@@ -331,6 +336,9 @@ void BluetoothKeyboardInput::stop() {
   scanRequested = false;
   hasPendingAutoConnect = false;
   pendingAutoConnectDeferred = false;
+  deleteKeyHeld = false;
+  deleteKeyDidWordDelete = false;
+  heldDeleteKeyCode = 0;
   bumpStatus();
   clearQueue();
 }
@@ -344,6 +352,7 @@ void BluetoothKeyboardInput::update() {
       connected = true;
       bumpStatus();
     }
+    processDeleteKeyHold();
     return;
   }
 
@@ -377,6 +386,7 @@ void BluetoothKeyboardInput::update() {
   if (connected) {
     LOG_DBG("BTK", "Keyboard client missing; returning to scan mode");
     connected = false;
+    deleteKeyHeld = false;
     scanRequested = true;
     bumpStatus();
   }
@@ -605,6 +615,16 @@ void BluetoothKeyboardInput::pushEvent(const KeyEvent event) {
   taskEXIT_CRITICAL(&queueMux);
 }
 
+void BluetoothKeyboardInput::pushTextEvent(const char* text) {
+  if (!text || text[0] == '\0') return;
+
+  KeyEvent event;
+  event.type = KeyType::Character;
+  event.character = text[0];
+  std::strncpy(event.text, text, sizeof(event.text) - 1);
+  pushEvent(event);
+}
+
 void BluetoothKeyboardInput::bumpStatus() { statusVersion = statusVersion + 1; }
 
 void BluetoothKeyboardInput::handleBootKeyboardReport(const uint8_t* data, const size_t length) {
@@ -617,19 +637,36 @@ void BluetoothKeyboardInput::handleBootKeyboardReport(const uint8_t* data, const
 
   const uint8_t modifiers = data[0];
   const uint8_t* keys = data + 2;
+  bool deleteKeyDown = false;
+  uint8_t deleteKeyCode = 0;
   for (int i = 0; i < 6; i++) {
     const uint8_t keyCode = keys[i];
+    if (isDeleteKey(keyCode)) {
+      deleteKeyDown = true;
+      deleteKeyCode = keyCode;
+      continue;
+    }
     if (keyCode == 0 || keyAlreadyDown(keyCode, previousKeys)) continue;
     emitKey(keyCode, modifiers);
   }
 
+  updateDeleteKeyHold(deleteKeyDown, deleteKeyCode);
   memcpy(previousKeys, keys, sizeof(previousKeys));
 }
 
 void BluetoothKeyboardInput::emitKey(const uint8_t keyCode, const uint8_t modifiers) {
-  const bool shifted = (modifiers & 0x22) != 0;  // left/right shift
+  const bool shifted = (modifiers & 0x22) != 0;        // left/right shift
+  const bool optionPressed = (modifiers & 0x44) != 0;  // left/right alt/option
+  if (optionPressed) {
+    if (const char* text = optionKeyToUtf8(keyCode, shifted); text != nullptr) {
+      pushTextEvent(text);
+      return;
+    }
+  }
+
   if (const char c = keyCodeToAscii(keyCode, shifted); c != '\0') {
-    pushEvent(KeyEvent{KeyType::Character, c});
+    const char text[] = {c, '\0'};
+    pushTextEvent(text);
     return;
   }
 
@@ -640,14 +677,8 @@ void BluetoothKeyboardInput::emitKey(const uint8_t keyCode, const uint8_t modifi
     case 0x29:
       pushEvent(KeyEvent{KeyType::Escape});
       break;
-    case 0x2A:
-      pushEvent(KeyEvent{KeyType::Backspace});
-      break;
     case 0x2B:
       pushEvent(KeyEvent{KeyType::Tab, '\t'});
-      break;
-    case 0x4C:
-      pushEvent(KeyEvent{KeyType::DeleteKey});
       break;
     case 0x4F:
       pushEvent(KeyEvent{KeyType::Right});
@@ -664,6 +695,82 @@ void BluetoothKeyboardInput::emitKey(const uint8_t keyCode, const uint8_t modifi
     default:
       break;
   }
+}
+
+void BluetoothKeyboardInput::updateDeleteKeyHold(const bool deleteKeyDown, const uint8_t deleteKeyCode) {
+  if (deleteKeyDown) {
+    if (!deleteKeyHeld) {
+      deleteKeyHeld = true;
+      deleteKeyDidWordDelete = false;
+      heldDeleteKeyCode = deleteKeyCode;
+      deleteKeyHoldStartedAt = millis();
+      nextDeleteWordAt = deleteKeyHoldStartedAt + DELETE_WORD_HOLD_DELAY_MS;
+    }
+    return;
+  }
+
+  if (!deleteKeyHeld) return;
+
+  if (!deleteKeyDidWordDelete) {
+    pushEvent(KeyEvent{heldDeleteKeyCode == 0x4C ? KeyType::DeleteKey : KeyType::Backspace});
+  }
+  deleteKeyHeld = false;
+  deleteKeyDidWordDelete = false;
+  heldDeleteKeyCode = 0;
+}
+
+void BluetoothKeyboardInput::processDeleteKeyHold() {
+  if (!deleteKeyHeld) return;
+
+  const unsigned long now = millis();
+  if (static_cast<long>(now - nextDeleteWordAt) < 0) return;
+
+  pushEvent(KeyEvent{KeyType::DeleteWord});
+  deleteKeyDidWordDelete = true;
+  nextDeleteWordAt = now + DELETE_WORD_REPEAT_MS;
+}
+
+const char* BluetoothKeyboardInput::optionKeyToUtf8(const uint8_t keyCode, const bool shifted) {
+  if (keyCode == 0x2D) {
+    return shifted ? "—" : "–";
+  }
+  if (keyCode == 0x33) {
+    return "…";
+  }
+
+  struct OptionLetter {
+    uint8_t keyCode;
+    const char* option;
+    const char* optionShift;
+  };
+
+  static constexpr OptionLetter letters[] = {
+      {0x04, "à", "á"},  // a
+      {0x06, "ç", "ć"},  // c
+      {0x07, "ḏ", "ď"},  // d
+      {0x08, "è", "é"},  // e
+      {0x0A, "ḡ", "ǵ"},  // g
+      {0x0B, "ẖ", "ĥ"},  // h
+      {0x0C, "ì", "í"},  // i
+      {0x0F, "ḻ", "ł"},  // l
+      {0x10, "ṁ", "ḿ"},  // m
+      {0x11, "ǹ", "ń"},  // n
+      {0x12, "ò", "ó"},  // o
+      {0x15, "ṟ", "ŕ"},  // r
+      {0x16, "ṣ", "ś"},  // s
+      {0x17, "ṯ", "ť"},  // t
+      {0x18, "ù", "ú"},  // u
+      {0x1A, "ẁ", "ẃ"},  // w
+      {0x1C, "ỳ", "ý"},  // y
+      {0x1D, "ẓ", "ź"},  // z
+  };
+
+  for (const auto& letter : letters) {
+    if (letter.keyCode == keyCode) {
+      return shifted ? letter.optionShift : letter.option;
+    }
+  }
+  return nullptr;
 }
 
 char BluetoothKeyboardInput::keyCodeToAscii(const uint8_t keyCode, const bool shifted) {
@@ -708,6 +815,8 @@ char BluetoothKeyboardInput::keyCodeToAscii(const uint8_t keyCode, const bool sh
       return '\0';
   }
 }
+
+bool BluetoothKeyboardInput::isDeleteKey(const uint8_t keyCode) { return keyCode == 0x2A || keyCode == 0x4C; }
 
 bool BluetoothKeyboardInput::keyAlreadyDown(const uint8_t keyCode, const uint8_t* keys) {
   for (int i = 0; i < 6; i++) {
