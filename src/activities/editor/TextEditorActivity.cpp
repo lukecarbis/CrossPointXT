@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "Utf8.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "input/BluetoothKeyboardInput.h"
@@ -318,9 +319,62 @@ void TextEditorActivity::confirmNewFilePrompt() {
   openNotePath(path);
 }
 
+void TextEditorActivity::startDeleteFileConfirmation() {
+  if (currentNotePath.empty() || currentNoteName.empty()) return;
+
+  deleteFileHoldConsumed = true;
+  const std::string deletePath = currentNotePath;
+  const std::string deleteName = currentNoteName;
+  startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, "Delete note?", deleteName),
+                         [this, deletePath](const ActivityResult& result) {
+                           deleteFileHoldConsumed = false;
+                           if (result.isCancelled) {
+                             requestUpdate();
+                             return;
+                           }
+                           if (currentNotePath == deletePath) {
+                             deleteCurrentFile();
+                           }
+                         });
+}
+
+void TextEditorActivity::deleteCurrentFile() {
+  if (currentNotePath.empty()) return;
+
+  const std::string deletePath = currentNotePath;
+  const int nextIndex = std::max(0, currentNoteIndex);
+  if (!Storage.remove(deletePath.c_str())) {
+    LOG_ERR("TXTEDIT", "Failed to delete note: %s", deletePath.c_str());
+    requestUpdate();
+    return;
+  }
+
+  dirty = false;
+  currentNotePath.clear();
+  currentNoteName.clear();
+  loadNotes();
+  createDefaultNoteIfNeeded();
+  loadNotes();
+
+  if (!noteFiles.empty()) {
+    openNoteAt(std::min(nextIndex, static_cast<int>(noteFiles.size()) - 1));
+  } else {
+    lines.clear();
+    lines.push_back("");
+    setCursorToEnd();
+    requestUpdate();
+  }
+}
+
 bool TextEditorActivity::handleDocumentControls() {
   if (mappedInput.isPressed(MappedInputManager::Button::Down) && mappedInput.getHeldTime() >= SIDE_BUTTON_HOLD_MS) {
     startNewFilePrompt();
+    return true;
+  }
+
+  if (!deleteFileHoldConsumed && mappedInput.isPressed(MappedInputManager::Button::Up) &&
+      mappedInput.getHeldTime() >= SIDE_BUTTON_HOLD_MS) {
+    startDeleteFileConfirmation();
     return true;
   }
 
@@ -329,8 +383,11 @@ bool TextEditorActivity::handleDocumentControls() {
     return true;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Up) && mappedInput.getHeldTime() < SIDE_BUTTON_HOLD_MS) {
-    openAdjacentNote(-1);
+  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+    if (mappedInput.getHeldTime() < SIDE_BUTTON_HOLD_MS && !deleteFileHoldConsumed) {
+      openAdjacentNote(-1);
+    }
+    deleteFileHoldConsumed = false;
     return true;
   }
 

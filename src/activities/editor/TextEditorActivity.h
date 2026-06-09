@@ -46,6 +46,7 @@ class TextEditorActivity final : public Activity {
   bool dirty = false;
   bool saveFailed = false;
   bool creatingNewFile = false;
+  bool deleteFileHoldConsumed = false;
   int cursorWordHoldDirection = 0;
   unsigned long lastEditAt = 0;
   unsigned long nextCursorWordMoveAt = 0;
@@ -62,6 +63,8 @@ class TextEditorActivity final : public Activity {
   void startNewFilePrompt();
   void cancelNewFilePrompt();
   void confirmNewFilePrompt();
+  void startDeleteFileConfirmation();
+  void deleteCurrentFile();
   bool handleDocumentControls();
   bool handleNewFilePromptControls();
   void handleNewFilePromptKeyEvent();

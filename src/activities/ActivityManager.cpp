@@ -109,7 +109,7 @@ void ActivityManager::notifyInterfaceOrientationChanged() {
 }
 
 bool ActivityManager::handleInterfaceOrientationHold() {
-  if (!mappedInput.isPressed(MappedInputManager::Button::Up)) {
+  if (!mappedInput.isPressed(MappedInputManager::Button::Right)) {
     interfaceOrientationHoldConsumed = false;
     return false;
   }
