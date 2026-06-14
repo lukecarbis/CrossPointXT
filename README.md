@@ -173,6 +173,8 @@ source .venv/bin/activate
 Plug the X3 in over USB with a data-capable cable, then flash the firmware:
 
 ```bash
+PATH=/usr/bin:/bin:/opt/homebrew/bin:$PWD/.venv/bin \
+PLATFORMIO_CORE_DIR=$PWD/.pio-core \
 pio run --target upload
 ```
 
