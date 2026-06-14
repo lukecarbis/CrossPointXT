@@ -17,7 +17,10 @@ class BluetoothKeyboardInput {
     Up,
     Down,
     DeleteKey,
-    DeleteWord
+    DeleteWord,
+    DeleteForwardWord,
+    LeftWord,
+    RightWord
   };
 
   struct KeyEvent {
@@ -88,6 +91,10 @@ class BluetoothKeyboardInput {
   uint8_t heldDeleteKeyCode = 0;
   unsigned long deleteKeyHoldStartedAt = 0;
   unsigned long nextDeleteWordAt = 0;
+  bool cursorArrowKeyHeld = false;
+  uint8_t heldCursorArrowKeyCode = 0;
+  unsigned long cursorArrowKeyHoldStartedAt = 0;
+  unsigned long nextCursorArrowWordAt = 0;
 
   void loadSavedKeyboard();
   void recordCandidate(const Candidate& candidate);
@@ -100,9 +107,12 @@ class BluetoothKeyboardInput {
   void emitKey(uint8_t keyCode, uint8_t modifiers);
   void updateDeleteKeyHold(bool deleteKeyDown, uint8_t deleteKeyCode);
   void processDeleteKeyHold();
+  void updateCursorArrowKeyHold(bool cursorArrowKeyDown, uint8_t cursorArrowKeyCode);
+  void processCursorArrowKeyHold();
   static const char* optionKeyToUtf8(uint8_t keyCode, bool shifted);
   static char keyCodeToAscii(uint8_t keyCode, bool shifted);
   static bool isDeleteKey(uint8_t keyCode);
+  static bool isCursorArrowKey(uint8_t keyCode);
   static bool keyAlreadyDown(uint8_t keyCode, const uint8_t* keys);
 
   friend void bluetoothKeyboardInputHandleReport(const uint8_t* data, size_t length);

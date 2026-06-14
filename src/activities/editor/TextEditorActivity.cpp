@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <iterator>
 
 #include "Utf8.h"
 #include "activities/util/ConfirmationActivity.h"
@@ -26,6 +27,8 @@ constexpr int LINE_GAP = 4;
 constexpr int MAX_VISIBLE_CANDIDATES = 5;
 
 bool isSentenceTerminator(const char c) { return c == '.' || c == '!' || c == '?'; }
+
+bool isClosingSentenceQuote(const char c) { return c == '"' || c == '\''; }
 }  // namespace
 
 void TextEditorActivity::onEnter() {
@@ -578,15 +581,25 @@ TextEditorActivity::SentenceRange TextEditorActivity::currentSentenceRange(const
       punctuationEnd++;
     }
 
-    size_t nextSentence = punctuationEnd;
+    size_t boundaryEnd = punctuationEnd;
+    while (boundaryEnd < line.size() && isClosingSentenceQuote(line[boundaryEnd])) {
+      boundaryEnd++;
+    }
+
+    if (boundaryEnd >= line.size() || !std::isspace(static_cast<unsigned char>(line[boundaryEnd]))) {
+      terminator = boundaryEnd;
+      continue;
+    }
+
+    size_t nextSentence = boundaryEnd;
     while (nextSentence < line.size() && std::isspace(static_cast<unsigned char>(line[nextSentence]))) {
       nextSentence++;
     }
     if (nextSentence < line.size()) {
-      starts.push_back(punctuationEnd);
+      starts.push_back(boundaryEnd);
     }
 
-    terminator = punctuationEnd;
+    terminator = boundaryEnd;
   }
 
   const size_t safeCursor = std::min(cursor, line.size());
@@ -727,12 +740,27 @@ void TextEditorActivity::handleKeyEvent() {
         changed = true;
         break;
       case BluetoothKeyboardInput::KeyType::Backspace:
-      case BluetoothKeyboardInput::KeyType::DeleteKey:
         backspace();
+        changed = true;
+        break;
+      case BluetoothKeyboardInput::KeyType::DeleteKey:
+        deleteForward();
         changed = true;
         break;
       case BluetoothKeyboardInput::KeyType::DeleteWord:
         deleteWord();
+        changed = true;
+        break;
+      case BluetoothKeyboardInput::KeyType::DeleteForwardWord:
+        deleteForwardWord();
+        changed = true;
+        break;
+      case BluetoothKeyboardInput::KeyType::LeftWord:
+        moveCursorWordLeft();
+        changed = true;
+        break;
+      case BluetoothKeyboardInput::KeyType::RightWord:
+        moveCursorWordRight();
         changed = true;
         break;
       case BluetoothKeyboardInput::KeyType::Left:
@@ -824,21 +852,34 @@ void TextEditorActivity::moveCursorWordRight() {
 
 void TextEditorActivity::moveCursorVertical(const int direction) {
   ensureCursorValid();
-  if (direction < 0) {
-    if (cursorLineIndex == 0) {
-      cursorByteIndex = 0;
-      return;
+  if (direction == 0) return;
+
+  const int contentWidth = renderer.getScreenWidth() - EDITOR_MARGIN_X * 2;
+  const std::vector<DisplayLine> displayLines = buildDisplayLines(contentWidth);
+  auto current = displayLines.end();
+  for (auto it = displayLines.begin(); it != displayLines.end(); ++it) {
+    if (it->cursorOffset != std::string::npos) {
+      current = it;
+      break;
     }
-    cursorLineIndex--;
-  } else if (direction > 0) {
-    if (cursorLineIndex + 1 >= lines.size()) {
-      cursorByteIndex = lines[cursorLineIndex].size();
-      return;
-    }
-    cursorLineIndex++;
-  } else {
+  }
+
+  if (current == displayLines.end()) return;
+  if (direction < 0 && current == displayLines.begin()) {
+    cursorLineIndex = 0;
+    cursorByteIndex = 0;
     return;
   }
+  if (direction > 0 && std::next(current) == displayLines.end()) {
+    setCursorToEnd();
+    return;
+  }
+
+  const auto target = direction < 0 ? std::prev(current) : std::next(current);
+  if (target->sourceLineIndex >= lines.size()) return;
+
+  cursorLineIndex = target->sourceLineIndex;
+  cursorByteIndex = target->sourceStart + std::min(current->cursorOffset, target->text.size());
   cursorByteIndex = clampUtf8Boundary(lines[cursorLineIndex], cursorByteIndex);
 }
 
@@ -898,6 +939,23 @@ void TextEditorActivity::backspace() {
   }
 }
 
+void TextEditorActivity::deleteForward() {
+  ensureCursorValid();
+  std::string& line = lines[cursorLineIndex];
+  if (cursorByteIndex < line.size()) {
+    const size_t next = nextUtf8Boundary(line, cursorByteIndex);
+    line.erase(cursorByteIndex, next - cursorByteIndex);
+    markDirty();
+    return;
+  }
+
+  if (cursorLineIndex + 1 < lines.size()) {
+    line += lines[cursorLineIndex + 1];
+    lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(cursorLineIndex + 1));
+    markDirty();
+  }
+}
+
 void TextEditorActivity::deleteWord() {
   ensureCursorValid();
   if (cursorByteIndex == 0) {
@@ -926,6 +984,32 @@ void TextEditorActivity::deleteWord() {
   }
 }
 
+void TextEditorActivity::deleteForwardWord() {
+  ensureCursorValid();
+  std::string& line = lines[cursorLineIndex];
+  if (cursorByteIndex >= line.size()) {
+    deleteForward();
+    return;
+  }
+
+  size_t deleteEnd = cursorByteIndex;
+  bool removed = false;
+  while (deleteEnd < line.size() && std::isspace(static_cast<unsigned char>(line[deleteEnd]))) {
+    deleteEnd = nextUtf8Boundary(line, deleteEnd);
+    removed = true;
+  }
+
+  while (deleteEnd < line.size() && !std::isspace(static_cast<unsigned char>(line[deleteEnd]))) {
+    deleteEnd = nextUtf8Boundary(line, deleteEnd);
+    removed = true;
+  }
+
+  if (removed) {
+    line.erase(cursorByteIndex, deleteEnd - cursorByteIndex);
+    markDirty();
+  }
+}
+
 size_t TextEditorActivity::byteCount() const {
   size_t total = lines.empty() ? 0 : lines.size() - 1;
   for (const auto& line : lines) total += line.size();
@@ -935,21 +1019,22 @@ size_t TextEditorActivity::byteCount() const {
 std::vector<TextEditorActivity::DisplayLine> TextEditorActivity::buildDisplayLines(const int maxWidth) const {
   std::vector<DisplayLine> displayLines;
   if (lines.empty()) {
-    displayLines.push_back(DisplayLine{"", 0, std::string::npos, std::string::npos});
+    displayLines.push_back(DisplayLine{"", 0, 0, 0, std::string::npos, std::string::npos});
     return displayLines;
   }
 
-  const bool hideCursorAtDocumentEnd = cursorLineIndex == lines.size() - 1 && cursorByteIndex == lines.back().size();
-  const auto appendWrapped = [&](const std::string& text, const SentenceRange currentRange, const bool isCursorLine) {
+  const auto appendWrapped = [&](const std::string& text, const size_t sourceLineIndex,
+                                 const SentenceRange currentRange, const bool isCursorLine) {
     const auto wrapped = renderer.wrappedText(EDITOR_FONT_ID, text.c_str(), maxWidth, 16);
     if (wrapped.empty()) {
-      displayLines.push_back(DisplayLine{"", isCursorLine ? 0 : std::string::npos, std::string::npos,
-                                         isCursorLine && !hideCursorAtDocumentEnd ? 0 : std::string::npos});
+      displayLines.push_back(DisplayLine{"", sourceLineIndex, 0, isCursorLine ? 0 : std::string::npos,
+                                         std::string::npos, isCursorLine ? 0 : std::string::npos});
       return;
     }
 
     size_t searchFrom = 0;
-    for (const auto& wrappedLine : wrapped) {
+    for (size_t wrappedIndex = 0; wrappedIndex < wrapped.size(); wrappedIndex++) {
+      const auto& wrappedLine = wrapped[wrappedIndex];
       size_t lineStart = text.find(wrappedLine, searchFrom);
       if (lineStart == std::string::npos) {
         lineStart = searchFrom;
@@ -967,7 +1052,7 @@ std::vector<TextEditorActivity::DisplayLine> TextEditorActivity::buildDisplayLin
       }
 
       size_t lineCursorOffset = std::string::npos;
-      if (isCursorLine && !hideCursorAtDocumentEnd) {
+      if (isCursorLine) {
         const bool isFinalWrappedLine = lineEnd >= text.size();
         const bool cursorOnLine = cursorByteIndex >= lineStart && cursorByteIndex < lineEnd;
         const bool cursorAtLineEnd = cursorByteIndex == lineEnd && isFinalWrappedLine;
@@ -976,13 +1061,17 @@ std::vector<TextEditorActivity::DisplayLine> TextEditorActivity::buildDisplayLin
         }
       }
 
-      displayLines.push_back(DisplayLine{wrappedLine, lineCurrentStart, lineCurrentEnd, lineCursorOffset});
+      displayLines.push_back(
+          DisplayLine{wrappedLine, sourceLineIndex, lineStart, lineCurrentStart, lineCurrentEnd, lineCursorOffset});
       searchFrom = lineEnd;
       while (searchFrom < text.size() && text[searchFrom] == ' ') {
         searchFrom++;
       }
-      if (isCursorLine && !hideCursorAtDocumentEnd && lineCursorOffset == std::string::npos &&
-          cursorByteIndex > lineEnd && cursorByteIndex <= searchFrom) {
+      const bool hasNextWrappedLine = wrappedIndex + 1 < wrapped.size();
+      const bool cursorInSkippedSpaces = hasNextWrappedLine
+                                             ? cursorByteIndex >= lineEnd && cursorByteIndex < searchFrom
+                                             : cursorByteIndex >= lineEnd && cursorByteIndex <= searchFrom;
+      if (isCursorLine && lineCursorOffset == std::string::npos && searchFrom > lineEnd && cursorInSkippedSpaces) {
         displayLines.back().text += text.substr(lineEnd, cursorByteIndex - lineEnd);
         displayLines.back().cursorOffset = displayLines.back().text.size();
       }
@@ -992,11 +1081,11 @@ std::vector<TextEditorActivity::DisplayLine> TextEditorActivity::buildDisplayLin
   for (size_t i = 0; i < lines.size(); i++) {
     const bool isCurrent = i == cursorLineIndex;
     if (!isCurrent) {
-      appendWrapped(lines[i], SentenceRange{std::string::npos, std::string::npos}, false);
+      appendWrapped(lines[i], i, SentenceRange{std::string::npos, std::string::npos}, false);
       continue;
     }
 
-    appendWrapped(lines[i], currentSentenceRange(lines[i], cursorByteIndex), true);
+    appendWrapped(lines[i], i, currentSentenceRange(lines[i], cursorByteIndex), true);
   }
   return displayLines;
 }

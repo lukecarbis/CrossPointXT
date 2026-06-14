@@ -19,6 +19,8 @@ class TextEditorActivity final : public Activity {
 
   struct DisplayLine {
     std::string text;
+    size_t sourceLineIndex = std::string::npos;
+    size_t sourceStart = 0;
     size_t currentStart = std::string::npos;
     size_t currentEnd = std::string::npos;
     size_t cursorOffset = std::string::npos;
@@ -92,7 +94,9 @@ class TextEditorActivity final : public Activity {
   void insertText(const char* text);
   void insertNewLine();
   void backspace();
+  void deleteForward();
   void deleteWord();
+  void deleteForwardWord();
   size_t byteCount() const;
   std::vector<DisplayLine> buildDisplayLines(int maxWidth) const;
   int textCursorWidth(int fontId, const std::string& text) const;
