@@ -90,6 +90,7 @@ class BluetoothKeyboardInput {
   uint8_t previousKeys[6] = {};
   bool deleteKeyHeld = false;
   bool deleteKeyDidWordDelete = false;
+  bool deleteKeyWordModifierHeld = false;
   uint8_t heldDeleteKeyCode = 0;
   unsigned long deleteKeyHoldStartedAt = 0;
   unsigned long nextDeleteWordAt = 0;
@@ -107,7 +108,7 @@ class BluetoothKeyboardInput {
   void bumpStatus();
   void handleBootKeyboardReport(const uint8_t* data, size_t length);
   void emitKey(uint8_t keyCode, uint8_t modifiers);
-  void updateDeleteKeyHold(bool deleteKeyDown, uint8_t deleteKeyCode);
+  void updateDeleteKeyHold(bool deleteKeyDown, uint8_t deleteKeyCode, bool deleteWordModifierDown);
   void processDeleteKeyHold();
   void updateCursorArrowKeyHold(bool cursorArrowKeyDown, uint8_t cursorArrowKeyCode);
   void processCursorArrowKeyHold();

@@ -289,6 +289,7 @@ void BluetoothKeyboardInput::begin() {
   pendingAutoConnectDeferred = false;
   deleteKeyHeld = false;
   deleteKeyDidWordDelete = false;
+  deleteKeyWordModifierHeld = false;
   heldDeleteKeyCode = 0;
   cursorArrowKeyHeld = false;
   heldCursorArrowKeyCode = 0;
@@ -340,6 +341,7 @@ void BluetoothKeyboardInput::stop() {
   pendingAutoConnectDeferred = false;
   deleteKeyHeld = false;
   deleteKeyDidWordDelete = false;
+  deleteKeyWordModifierHeld = false;
   heldDeleteKeyCode = 0;
   cursorArrowKeyHeld = false;
   heldCursorArrowKeyCode = 0;
@@ -392,6 +394,7 @@ void BluetoothKeyboardInput::update() {
     LOG_DBG("BTK", "Keyboard client missing; returning to scan mode");
     connected = false;
     deleteKeyHeld = false;
+    deleteKeyWordModifierHeld = false;
     scanRequested = true;
     bumpStatus();
   }
@@ -641,6 +644,7 @@ void BluetoothKeyboardInput::handleBootKeyboardReport(const uint8_t* data, const
   }
 
   const uint8_t modifiers = data[0];
+  const bool optionPressed = (modifiers & 0x44) != 0;  // left/right alt/option
   const uint8_t* keys = data + 2;
   bool deleteKeyDown = false;
   uint8_t deleteKeyCode = 0;
@@ -661,7 +665,7 @@ void BluetoothKeyboardInput::handleBootKeyboardReport(const uint8_t* data, const
     emitKey(keyCode, modifiers);
   }
 
-  updateDeleteKeyHold(deleteKeyDown, deleteKeyCode);
+  updateDeleteKeyHold(deleteKeyDown, deleteKeyCode, optionPressed);
   updateCursorArrowKeyHold(cursorArrowKeyDown, cursorArrowKeyCode);
   memcpy(previousKeys, keys, sizeof(previousKeys));
 }
@@ -725,14 +729,18 @@ void BluetoothKeyboardInput::emitKey(const uint8_t keyCode, const uint8_t modifi
   }
 }
 
-void BluetoothKeyboardInput::updateDeleteKeyHold(const bool deleteKeyDown, const uint8_t deleteKeyCode) {
+void BluetoothKeyboardInput::updateDeleteKeyHold(const bool deleteKeyDown, const uint8_t deleteKeyCode,
+                                                 const bool deleteWordModifierDown) {
   if (deleteKeyDown) {
     if (!deleteKeyHeld) {
       deleteKeyHeld = true;
       deleteKeyDidWordDelete = false;
+      deleteKeyWordModifierHeld = deleteWordModifierDown;
       heldDeleteKeyCode = deleteKeyCode;
       deleteKeyHoldStartedAt = millis();
       nextDeleteWordAt = deleteKeyHoldStartedAt + WORD_HOLD_DELAY_MS;
+    } else if (deleteWordModifierDown) {
+      deleteKeyWordModifierHeld = true;
     }
     return;
   }
@@ -740,10 +748,15 @@ void BluetoothKeyboardInput::updateDeleteKeyHold(const bool deleteKeyDown, const
   if (!deleteKeyHeld) return;
 
   if (!deleteKeyDidWordDelete) {
-    pushEvent(KeyEvent{heldDeleteKeyCode == 0x4C ? KeyType::DeleteKey : KeyType::Backspace});
+    if (deleteKeyWordModifierHeld) {
+      pushEvent(KeyEvent{heldDeleteKeyCode == 0x4C ? KeyType::DeleteForwardWord : KeyType::DeleteWord});
+    } else {
+      pushEvent(KeyEvent{heldDeleteKeyCode == 0x4C ? KeyType::DeleteKey : KeyType::Backspace});
+    }
   }
   deleteKeyHeld = false;
   deleteKeyDidWordDelete = false;
+  deleteKeyWordModifierHeld = false;
   heldDeleteKeyCode = 0;
 }
 

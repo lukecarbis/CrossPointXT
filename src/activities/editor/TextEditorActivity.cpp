@@ -1022,14 +1022,18 @@ void TextEditorActivity::deleteWord() {
   const size_t originalCursor = cursorByteIndex;
   size_t deleteStart = cursorByteIndex;
   bool removed = false;
-  while (deleteStart > 0 && std::isspace(static_cast<unsigned char>(line[previousUtf8Boundary(line, deleteStart)]))) {
+  while (deleteStart > 0 && isSpaceByte(static_cast<unsigned char>(line[previousUtf8Boundary(line, deleteStart)]))) {
     deleteStart = previousUtf8Boundary(line, deleteStart);
     removed = true;
   }
 
-  while (deleteStart > 0 && !std::isspace(static_cast<unsigned char>(line[previousUtf8Boundary(line, deleteStart)]))) {
-    deleteStart = previousUtf8Boundary(line, deleteStart);
-    removed = true;
+  if (deleteStart > 0) {
+    const bool targetIsWord = isWordByte(static_cast<unsigned char>(line[previousUtf8Boundary(line, deleteStart)]));
+    while (deleteStart > 0 && !isSpaceByte(static_cast<unsigned char>(line[previousUtf8Boundary(line, deleteStart)])) &&
+           isWordByte(static_cast<unsigned char>(line[previousUtf8Boundary(line, deleteStart)])) == targetIsWord) {
+      deleteStart = previousUtf8Boundary(line, deleteStart);
+      removed = true;
+    }
   }
 
   if (removed) {
@@ -1049,14 +1053,18 @@ void TextEditorActivity::deleteForwardWord() {
 
   size_t deleteEnd = cursorByteIndex;
   bool removed = false;
-  while (deleteEnd < line.size() && std::isspace(static_cast<unsigned char>(line[deleteEnd]))) {
+  while (deleteEnd < line.size() && isSpaceByte(static_cast<unsigned char>(line[deleteEnd]))) {
     deleteEnd = nextUtf8Boundary(line, deleteEnd);
     removed = true;
   }
 
-  while (deleteEnd < line.size() && !std::isspace(static_cast<unsigned char>(line[deleteEnd]))) {
-    deleteEnd = nextUtf8Boundary(line, deleteEnd);
-    removed = true;
+  if (deleteEnd < line.size()) {
+    const bool targetIsWord = isWordByte(static_cast<unsigned char>(line[deleteEnd]));
+    while (deleteEnd < line.size() && !isSpaceByte(static_cast<unsigned char>(line[deleteEnd])) &&
+           isWordByte(static_cast<unsigned char>(line[deleteEnd])) == targetIsWord) {
+      deleteEnd = nextUtf8Boundary(line, deleteEnd);
+      removed = true;
+    }
   }
 
   if (removed) {
