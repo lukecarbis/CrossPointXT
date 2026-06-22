@@ -1,16 +1,18 @@
-# CrossPoint Reader
+# CrossPointXT
 
-[![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
+[![Fund upstream contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_upstream_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
 
-CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.
+CrossPointXT is a focused fork of CrossPoint Reader for people who want the same lightweight e-reader firmware plus a small, local text editor that pairs with a Bluetooth keyboard. It keeps CrossPoint's reading-first foundation while adding a writing surface for plain-text notes and drafts.
 
 **Now running on:** ESP32C3-based Xteink [X4](https://www.xteink.com/products/xteink-x4) and [X3](https://www.xteink.com/products/xteink-x3).
 
-![CrossPoint Reader running on Xteink device](./docs/images/cover.jpg)
+![CrossPointXT running on Xteink device](./docs/images/cover.jpg)
 
-## What can CrossPoint do?
+## What can CrossPointXT do?
 
 - **Reader engine**: EPUB 2/3 rendering with embedded-style option, image handling, hyphenation, kerning, chapter navigation, footnotes, bookmarks, go-to-percent, auto page turn, orientation control, focus reading, KOReader progress sync and more. 
+
+- **Text editor**: local plain-text notes and drafts under `/notes`, designed for use with a Bluetooth keyboard, including keyboard pairing, document switching, autosave, cursor movement, and basic editing commands.
 
 - **Various formats**: native handling for `.epub`, `.xtc/.xtch`, `.txt`, and `.bmp`.
 
@@ -52,7 +54,7 @@ CrossPoint is open-source e-reader firmware - community-built, fully hackable, f
 
 Some Xteink units purchased from third-party stores (e.g. AliExpress) ship with USB flashing locked from the factory.
 If your device is locked, you will need to use the **Xteink Unlocker** tool available at
-https://crosspointreader.com/#unlock-tool before you can flash CrossPoint.
+https://crosspointreader.com/#unlock-tool before you can flash CrossPoint or a CrossPointXT build.
 
 **You do not need this tool if you bought your device directly from xteink.com.** Those units are not locked.
 
@@ -77,7 +79,7 @@ USB port or browser before assuming the device is locked. Only reach for the unl
 ### Web installer (recommended)
 
 1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Go to https://crosspointreader.com/#flash-tools, select device (X3 or X4), and choose an official CrossPoint release.
+2. Go to https://crosspointreader.com/#flash-tools, select device (X3 or X4), and choose an official CrossPoint release or use a CrossPointXT `.bin` with the custom firmware option.
 
 ### Web installer (specific version)
 
@@ -225,7 +227,7 @@ Minor adjustments may be required for Windows.
 
 ## Internals
 
-CrossPoint Reader is pretty aggressive about caching data down to the SD card to minimise RAM usage. The ESP32-C3 only has ~380KB of usable RAM, so we have to be careful. A lot of the decisions made in the design of the firmware were based on this constraint.
+CrossPointXT is pretty aggressive about caching data down to the SD card to minimise RAM usage. The ESP32-C3 only has ~380KB of usable RAM, so we have to be careful. A lot of the decisions made in the design of the firmware were based on this constraint.
 
 ### Data caching
 
@@ -265,7 +267,7 @@ Everyone here is a volunteer, so please be respectful and patient. For governanc
 
 ## Community forks
 
-One of the best things about open source is that anyone can take the code in a different direction. If you need something outside CrossPoint's [scope](./SCOPE.md), check out the community forks:
+One of the best things about open source is that anyone can take the code in a different direction. CrossPointXT is one such fork: it keeps the upstream reader focus and adds a constrained Bluetooth-keyboard text editor. If you need something outside CrossPointXT's [scope](./SCOPE.md), check out other community forks:
 
 - [CrossInk](https://github.com/uxjulia/CrossInk) — Typography and reading tracking: Bionic Reading (bolds word stems to create fixation points), guide dots between words, improved paragraph indents, and replaces the default fonts with ChareInk/Lexend/Bitter.
 
@@ -283,12 +285,12 @@ One of the best things about open source is that anyone can take the code in a d
 
 - [t5s3-reader](https://github.com/ShallowGreen123/t5s3-reader) — Crosspoint port for LilyGo T5 ePaper S3 / T5S3 4.7-inch e-paper device.
 
-**Note:** Many of these features will make their way into CrossPoint over time. We maintain a slower pace to ensure rock-solid stability and squash bugs before they reach your device.
+**Note:** Many of these features may make their way into upstream CrossPoint over time. CrossPointXT stays deliberately narrow: reading plus local plain-text writing.
 
 Want to build your own device? Be sure to check out the [de-link](https://github.com/iandchasse/de-link) project.
 
 ---
 
-CrossPoint Reader is **not affiliated with Xteink or any device manufacturer**.
+CrossPointXT is **not affiliated with Xteink or any device manufacturer**.
 
 Huge shoutout to [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader), which inspired this project.
