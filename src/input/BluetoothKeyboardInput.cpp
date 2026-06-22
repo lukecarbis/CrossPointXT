@@ -670,6 +670,22 @@ void BluetoothKeyboardInput::emitKey(const uint8_t keyCode, const uint8_t modifi
   const bool shifted = (modifiers & 0x22) != 0;        // left/right shift
   const bool optionPressed = (modifiers & 0x44) != 0;  // left/right alt/option
   if (optionPressed) {
+    if (keyCode == 0x4F) {
+      pushEvent(KeyEvent{KeyType::RightWord});
+      return;
+    }
+    if (keyCode == 0x50) {
+      pushEvent(KeyEvent{KeyType::LeftWord});
+      return;
+    }
+    if (keyCode == 0x51) {
+      pushEvent(KeyEvent{KeyType::DocumentEnd});
+      return;
+    }
+    if (keyCode == 0x52) {
+      pushEvent(KeyEvent{KeyType::DocumentStart});
+      return;
+    }
     if (const char* text = optionKeyToUtf8(keyCode, shifted); text != nullptr) {
       pushTextEvent(text);
       return;
@@ -797,24 +813,24 @@ const char* BluetoothKeyboardInput::optionKeyToUtf8(const uint8_t keyCode, const
   };
 
   static constexpr OptionLetter letters[] = {
-      {0x04, "à", "á"},  // a
-      {0x06, "ç", "ć"},  // c
-      {0x07, "ḏ", "ď"},  // d
-      {0x08, "è", "é"},  // e
-      {0x0A, "ḡ", "ǵ"},  // g
-      {0x0B, "ẖ", "ĥ"},  // h
-      {0x0C, "ì", "í"},  // i
-      {0x0F, "ḻ", "ł"},  // l
-      {0x10, "ṁ", "ḿ"},  // m
-      {0x11, "ǹ", "ń"},  // n
-      {0x12, "ò", "ó"},  // o
-      {0x15, "ṟ", "ŕ"},  // r
-      {0x16, "ṣ", "ś"},  // s
-      {0x17, "ṯ", "ť"},  // t
-      {0x18, "ù", "ú"},  // u
-      {0x1A, "ẁ", "ẃ"},  // w
-      {0x1C, "ỳ", "ý"},  // y
-      {0x1D, "ẓ", "ź"},  // z
+      {0x04, "à", "á"},      // a
+      {0x06, "ç", "ć"},      // c
+      {0x07, "ḏ", "ď"},      // d
+      {0x08, "è", "é"},      // e
+      {0x0A, "ḡ", "ǵ"},      // g
+      {0x0B, "ẖ", "ĥ"},      // h
+      {0x0C, "ì", "í"},      // i
+      {0x0F, "ł", nullptr},  // l
+      {0x10, "ṁ", "ḿ"},      // m
+      {0x11, "ǹ", "ń"},      // n
+      {0x12, "ò", "ó"},      // o
+      {0x15, "ṟ", "ŕ"},      // r
+      {0x16, "ṣ", "ś"},      // s
+      {0x17, "ṯ", "ť"},      // t
+      {0x18, "ù", "ú"},      // u
+      {0x1A, "ẁ", "ẃ"},      // w
+      {0x1C, "ỳ", "ý"},      // y
+      {0x1D, "ẓ", "ź"},      // z
   };
 
   for (const auto& letter : letters) {

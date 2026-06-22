@@ -59,6 +59,7 @@ class TextEditorActivity final : public Activity {
   void saveCurrentDocument();
   void loadNotes();
   void createDefaultNoteIfNeeded();
+  void rememberCurrentNote();
   void openNoteAt(int index);
   void openNotePath(const std::string& path);
   void openAdjacentNote(int direction);
@@ -78,6 +79,7 @@ class TextEditorActivity final : public Activity {
   static size_t previousUtf8Boundary(const std::string& text, size_t index);
   static size_t nextUtf8Boundary(const std::string& text, size_t index);
   static size_t clampUtf8Boundary(const std::string& text, size_t index);
+  void setCursorToStart();
   void setCursorToEnd();
   void ensureCursorValid();
   void markDirty();

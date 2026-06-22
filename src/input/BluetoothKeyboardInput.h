@@ -20,7 +20,9 @@ class BluetoothKeyboardInput {
     DeleteWord,
     DeleteForwardWord,
     LeftWord,
-    RightWord
+    RightWord,
+    DocumentStart,
+    DocumentEnd
   };
 
   struct KeyEvent {

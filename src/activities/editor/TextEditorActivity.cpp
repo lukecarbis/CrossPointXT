@@ -9,6 +9,7 @@
 #include <cstring>
 #include <iterator>
 
+#include "CrossPointState.h"
 #include "Utf8.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
@@ -29,6 +30,10 @@ constexpr int MAX_VISIBLE_CANDIDATES = 5;
 bool isSentenceTerminator(const char c) { return c == '.' || c == '!' || c == '?'; }
 
 bool isClosingSentenceQuote(const char c) { return c == '"' || c == '\''; }
+
+bool isSpaceByte(const unsigned char c) { return std::isspace(c); }
+
+bool isWordByte(const unsigned char c) { return c >= 0x80 || std::isalnum(c) || c == '_'; }
 }  // namespace
 
 void TextEditorActivity::onEnter() {
@@ -149,6 +154,14 @@ void TextEditorActivity::loadInitialDocument() {
   loadNotes();
 
   if (!noteFiles.empty()) {
+    if (!APP_STATE.textEditorNotePath.empty()) {
+      for (size_t i = 0; i < noteFiles.size(); i++) {
+        if (noteFiles[i].path == APP_STATE.textEditorNotePath) {
+          openNoteAt(static_cast<int>(i));
+          return;
+        }
+      }
+    }
     openNoteAt(0);
   }
 }
@@ -247,6 +260,15 @@ void TextEditorActivity::createDefaultNoteIfNeeded() {
   }
 }
 
+void TextEditorActivity::rememberCurrentNote() {
+  if (currentNotePath.empty() || APP_STATE.textEditorNotePath == currentNotePath) return;
+
+  APP_STATE.textEditorNotePath = currentNotePath;
+  if (!APP_STATE.saveToFile()) {
+    LOG_ERR("TXTEDIT", "Failed to save last note path");
+  }
+}
+
 void TextEditorActivity::openNoteAt(const int index) {
   if (noteFiles.empty()) return;
 
@@ -255,6 +277,7 @@ void TextEditorActivity::openNoteAt(const int index) {
   currentNoteIndex = wrappedIndex;
   currentNotePath = noteFiles[wrappedIndex].path;
   currentNoteName = noteFiles[wrappedIndex].name;
+  rememberCurrentNote();
   loadCurrentDocument();
   requestUpdate();
 }
@@ -265,6 +288,7 @@ void TextEditorActivity::openNotePath(const std::string& path) {
   if (currentNoteIndex < 0) {
     currentNoteName = path.substr(path.find_last_of('/') + 1);
   }
+  rememberCurrentNote();
   loadCurrentDocument();
   requestUpdate();
 }
@@ -648,6 +672,14 @@ void TextEditorActivity::setCursorToEnd() {
   cursorByteIndex = lines.back().size();
 }
 
+void TextEditorActivity::setCursorToStart() {
+  if (lines.empty()) {
+    lines.push_back("");
+  }
+  cursorLineIndex = 0;
+  cursorByteIndex = 0;
+}
+
 void TextEditorActivity::ensureCursorValid() {
   if (lines.empty()) {
     lines.push_back("");
@@ -763,6 +795,14 @@ void TextEditorActivity::handleKeyEvent() {
         moveCursorWordRight();
         changed = true;
         break;
+      case BluetoothKeyboardInput::KeyType::DocumentStart:
+        setCursorToStart();
+        changed = true;
+        break;
+      case BluetoothKeyboardInput::KeyType::DocumentEnd:
+        setCursorToEnd();
+        changed = true;
+        break;
       case BluetoothKeyboardInput::KeyType::Left:
         moveCursorLeft();
         changed = true;
@@ -813,40 +853,55 @@ void TextEditorActivity::moveCursorRight() {
 void TextEditorActivity::moveCursorWordLeft() {
   ensureCursorValid();
 
-  while (cursorByteIndex == 0) {
-    if (cursorLineIndex == 0) return;
-    cursorLineIndex--;
-    cursorByteIndex = lines[cursorLineIndex].size();
-  }
+  while (true) {
+    while (cursorByteIndex == 0) {
+      if (cursorLineIndex == 0) return;
+      cursorLineIndex--;
+      cursorByteIndex = lines[cursorLineIndex].size();
+    }
 
-  std::string& line = lines[cursorLineIndex];
-  while (cursorByteIndex > 0 &&
-         std::isspace(static_cast<unsigned char>(line[previousUtf8Boundary(line, cursorByteIndex)]))) {
-    cursorByteIndex = previousUtf8Boundary(line, cursorByteIndex);
-  }
+    const std::string& line = lines[cursorLineIndex];
+    size_t previous = previousUtf8Boundary(line, cursorByteIndex);
+    while (isSpaceByte(static_cast<unsigned char>(line[previous]))) {
+      cursorByteIndex = previous;
+      if (cursorByteIndex == 0) break;
+      previous = previousUtf8Boundary(line, cursorByteIndex);
+    }
+    if (cursorByteIndex == 0) continue;
 
-  while (cursorByteIndex > 0 &&
-         !std::isspace(static_cast<unsigned char>(line[previousUtf8Boundary(line, cursorByteIndex)]))) {
-    cursorByteIndex = previousUtf8Boundary(line, cursorByteIndex);
+    const bool targetIsWord = isWordByte(static_cast<unsigned char>(line[previous]));
+    do {
+      cursorByteIndex = previous;
+      if (cursorByteIndex == 0) return;
+      previous = previousUtf8Boundary(line, cursorByteIndex);
+    } while (!isSpaceByte(static_cast<unsigned char>(line[previous])) &&
+             isWordByte(static_cast<unsigned char>(line[previous])) == targetIsWord);
+    return;
   }
 }
 
 void TextEditorActivity::moveCursorWordRight() {
   ensureCursorValid();
 
-  while (cursorByteIndex >= lines[cursorLineIndex].size()) {
-    if (cursorLineIndex + 1 >= lines.size()) return;
-    cursorLineIndex++;
-    cursorByteIndex = 0;
-  }
+  while (true) {
+    while (cursorByteIndex >= lines[cursorLineIndex].size()) {
+      if (cursorLineIndex + 1 >= lines.size()) return;
+      cursorLineIndex++;
+      cursorByteIndex = 0;
+    }
 
-  std::string& line = lines[cursorLineIndex];
-  while (cursorByteIndex < line.size() && std::isspace(static_cast<unsigned char>(line[cursorByteIndex]))) {
-    cursorByteIndex = nextUtf8Boundary(line, cursorByteIndex);
-  }
+    const std::string& line = lines[cursorLineIndex];
+    while (cursorByteIndex < line.size() && isSpaceByte(static_cast<unsigned char>(line[cursorByteIndex]))) {
+      cursorByteIndex = nextUtf8Boundary(line, cursorByteIndex);
+    }
+    if (cursorByteIndex >= line.size()) continue;
 
-  while (cursorByteIndex < line.size() && !std::isspace(static_cast<unsigned char>(line[cursorByteIndex]))) {
-    cursorByteIndex = nextUtf8Boundary(line, cursorByteIndex);
+    const bool targetIsWord = isWordByte(static_cast<unsigned char>(line[cursorByteIndex]));
+    do {
+      cursorByteIndex = nextUtf8Boundary(line, cursorByteIndex);
+    } while (cursorByteIndex < line.size() && !isSpaceByte(static_cast<unsigned char>(line[cursorByteIndex])) &&
+             isWordByte(static_cast<unsigned char>(line[cursorByteIndex])) == targetIsWord);
+    return;
   }
 }
 
